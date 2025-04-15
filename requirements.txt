@@ -1,0 +1,4 @@
+fpdf2==2.8.2
+openai==1.74.0
+Pillow==11.2.1
+Requests==2.32.3
