@@ -232,31 +232,33 @@ def async_generate_images_and_pdfs(data, progress=gr.Progress()):
     pdf_full = create_pdf(data, mode="full", image_paths=image_paths)  # 全部文字信息，无图
     pdf_qa = create_pdf(data, mode="question", image_paths=image_paths)  # 问答练习，无图
     pdf_illustrated = create_pdf(data, mode="illustrated", image_paths=image_paths)  # 图文版，只正文+图
+    yield "\n".join(story_html_parts), "✅ 所有插图已完成", pdf_story, pdf_full, pdf_qa, pdf_illustrated
 
-    audio_path = synthesize_audio_from_story(data['story'])
-    yield "\n".join(story_html_parts), "✅ 所有插图已完成", pdf_story, pdf_full, pdf_qa, pdf_illustrated, audio_path
+    # audio_path = synthesize_audio_from_story(data['story'])
+    # yield "\n".join(story_html_parts), "✅ 所有插图已完成", pdf_story, pdf_full, pdf_qa, pdf_illustrated, audio_path
+
 
 
 # ============== 语音合成 =================
-def synthesize_audio_from_story(story_text):
-    from datetime import datetime
-
-    # 初始化语音模型
-    tts_pipeline = pipeline(
-        task=Tasks.text_to_speech,
-        model='damo/speech_sambert-hifigan_tts_zh-cn_16k'
-    )
-
-    # 执行语音合成
-    output = tts_pipeline(input=story_text, voice='zhitian_emo')
-    wav_data = output[OutputKeys.OUTPUT_WAV]
-
-    # 保存音频文件
-    tmp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-    with open(tmp_path, 'wb') as f:
-        f.write(wav_data)
-
-    return tmp_path
+# def synthesize_audio_from_story(story_text):
+#     from datetime import datetime
+#
+#     # 初始化语音模型
+#     tts_pipeline = pipeline(
+#         task=Tasks.text_to_speech,
+#         model='damo/speech_sambert-hifigan_tts_zh-cn_16k'
+#     )
+#
+#     # 执行语音合成
+#     output = tts_pipeline(input=story_text, voice='zhitian_emo')
+#     wav_data = output[OutputKeys.OUTPUT_WAV]
+#
+#     # 保存音频文件
+#     tmp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+#     with open(tmp_path, 'wb') as f:
+#         f.write(wav_data)
+#
+#     return tmp_path
 
 # ============== Gradio UI =================
 
