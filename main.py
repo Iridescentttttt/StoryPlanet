@@ -8,14 +8,10 @@ import tempfile
 import requests
 from PIL import Image
 from io import BytesIO
-import time
 import base64
-
-def image_to_base64(image_path):
-    with open(image_path, "rb") as img_f:
-        encoded = base64.b64encode(img_f.read()).decode("utf-8")
-        ext = image_path.split('.')[-1]
-        return f"data:image/{ext};base64,{encoded}"
+# from modelscope.pipelines import pipeline
+# from modelscope.utils.constant import Tasks
+# from modelscope.outputs import OutputKeys
 
 
 # 模型客户端初始化
@@ -25,6 +21,11 @@ client = OpenAI(
 )
 
 # ============== 工具函数 =================
+def image_to_base64(image_path):
+    with open(image_path, "rb") as img_f:
+        encoded = base64.b64encode(img_f.read()).decode("utf-8")
+        ext = image_path.split('.')[-1]
+        return f"data:image/{ext};base64,{encoded}"
 
 def split_story_to_paragraphs(story_text):
     return [p.strip() for p in story_text.split('\n') if p.strip()]
@@ -76,7 +77,7 @@ def summarize_and_translate(paragraphs):
 
 # ============== 构建绘本请求 Prompt =================
 
-def build_prompt(age, trait, interest, sensitivity, cognitive, edu_goal, words, max_characters):
+def build_prompt(age, trait, interest, sensitivity, cognitive, edu_goal, words, max_characters,para_count):
     return f"""
 你是孤独症儿童绘本创作专家，请根据以下儿童信息和教育目标，生成一篇适合TA阅读的故事，并以JSON格式输出。
 
@@ -87,16 +88,13 @@ def build_prompt(age, trait, interest, sensitivity, cognitive, edu_goal, words, 
 - 感官敏感点：{sensitivity}
 - 认知水平：{cognitive}
 
-【故事生成要求】
-- 字数控制在{words}字左右
+【故事生成要求
+- 教育目标：{edu_goal}
+- 期望段落数量：{para_count}段
 - 角色数量不超过{max_characters}个
-- 合适位置请换段落，帮助理解
-- 使用重复句式
-- 避免刺激性词汇
-- 包含教育目标说明
-
-【教育目标说明】
-{edu_goal}
+- 字数控制在{words}字左右，语言温和，避免感官刺激
+- 每段保持逻辑清晰，适当使用重复句式
+- 输出为以下 JSON 格式（不加 Markdown、注释）：
 
 请严格输出如下 JSON 格式：
 
@@ -114,8 +112,8 @@ def build_prompt(age, trait, interest, sensitivity, cognitive, edu_goal, words, 
 请严格只输出 JSON，不加任何注释、标点或 Markdown。
 """
 
-def generate_story(age, trait, interest, sensitivity, cognitive, edu_goal, max_words, max_characters):
-    prompt = build_prompt(age, trait, interest, sensitivity, cognitive, edu_goal, max_words, max_characters)
+def generate_story(age, trait, interest, sensitivity, cognitive, edu_goal, max_words, max_characters,para_count):
+    prompt = build_prompt(age, trait, interest, sensitivity, cognitive, edu_goal, max_words, max_characters,para_count)
     response = client.chat.completions.create(
         model='deepseek-ai/DeepSeek-V3',
         messages=[
@@ -158,10 +156,8 @@ def create_pdf(data, mode="full", image_paths=None):
             img = Image.open(image_paths[idx])
             img.thumbnail((200, 200))
             thumb_path = f"thumb_{idx}.jpg"
-            # img.save(thumb_path)
-            # pdf.image(thumb_path, x=pdf.w / 2 - 60, w=120)
-            # pdf.ln(5)
-            x_center = (210 - 100) / 2  # A4宽度210mm，图宽100，居中
+            img.save(thumb_path)  # 👈 确保保存缩略图
+            x_center = (210 - 100) / 2
             pdf.image(thumb_path, x=x_center, w=100)
             pdf.ln(5)
 
@@ -181,16 +177,13 @@ def create_pdf(data, mode="full", image_paths=None):
 
 # ============== 分步执行函数 =================
 
-def generate_story_only(age, trait, interest, sensitivity, cognitive, max_words, max_characters, edu_goal_choice, edu_goal_custom):
-    final_goal = edu_goal_custom if edu_goal_choice == "自定义目标" else edu_goal_choice
-    data = generate_story(age, trait, interest, sensitivity, cognitive, final_goal, max_words, max_characters)
+def generate_story_only(age, trait, interest, sensitivity, cognitive, max_words, max_characters, para_count, edu_goal):
+    data = generate_story(age, trait, interest, sensitivity, cognitive, edu_goal, max_words, max_characters, para_count)
     if "error" in data:
         return data["error"], "", "", "", "", data
 
     qa_str = "\n".join([f"Q: {q['question']}\nA: {q['answer']}" for q in data["qa"]])
     paragraphs = split_story_to_paragraphs(data["story"])
-
-    # 初始只显示文本，每段一个 <p> 标签
     story_html = ""
     for i, p in enumerate(paragraphs):
         story_html += f'<div id="para{i}"><p>{p}</p></div>'
@@ -240,7 +233,30 @@ def async_generate_images_and_pdfs(data, progress=gr.Progress()):
     pdf_qa = create_pdf(data, mode="question", image_paths=image_paths)  # 问答练习，无图
     pdf_illustrated = create_pdf(data, mode="illustrated", image_paths=image_paths)  # 图文版，只正文+图
 
-    yield "\n".join(story_html_parts), "✅ 所有插图已完成", pdf_story, pdf_full, pdf_qa, pdf_illustrated
+    audio_path = synthesize_audio_from_story(data['story'])
+    yield "\n".join(story_html_parts), "✅ 所有插图已完成", pdf_story, pdf_full, pdf_qa, pdf_illustrated, audio_path
+
+
+# ============== 语音合成 =================
+def synthesize_audio_from_story(story_text):
+    from datetime import datetime
+
+    # 初始化语音模型
+    tts_pipeline = pipeline(
+        task=Tasks.text_to_speech,
+        model='damo/speech_sambert-hifigan_tts_zh-cn_16k'
+    )
+
+    # 执行语音合成
+    output = tts_pipeline(input=story_text, voice='zhitian_emo')
+    wav_data = output[OutputKeys.OUTPUT_WAV]
+
+    # 保存音频文件
+    tmp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+    with open(tmp_path, 'wb') as f:
+        f.write(wav_data)
+
+    return tmp_path
 
 # ============== Gradio UI =================
 
@@ -249,50 +265,56 @@ with gr.Blocks(title="图文绘本生成系统") as demo:
 
     with gr.Row():
         with gr.Column():
-            age = gr.Slider(2, 18, step=1, label="儿童年龄", value=5)
-            trait = gr.Textbox(label="性格特点（如 害羞、喜欢重复）")
-            interest = gr.Textbox(label="兴趣主题（如 火车、恐龙）")
-            sensitivity = gr.Dropdown(["声音敏感", "触觉敏感", "无"], label="感官敏感点")
-            cognitive = gr.Dropdown(["初级", "中级", "高级"], label="认知水平")
-            max_words = gr.Slider(50, 1500, step=10, label="故事字数", value=400)
-            max_characters = gr.Slider(1, 5, step=1, value=3, label="最多角色数量")
-            edu_goal = gr.Dropdown(
-                ["社交互动：通过玩积木学会轮流", "情绪认知：通过故事引导情绪安抚", "行为规范：通过公园场景学习不打人", "感官调节：帮助孩子识别安静空间", "学校情境：学习与老师表达需求", "自定义目标"],
-                label="教育目标（可自定义）")
-            edu_goal_custom = gr.Textbox(label="如选择自定义，请在此填写目标说明")
+            age = gr.Slider(2, 18, label="儿童年龄", value=2)
+            max_words = gr.Slider(50, 1500, label="最大字数", value=50)
+            para_count = gr.Slider(1, 10, step=1, label="段落数量", value=1)
+            max_characters = gr.Slider(1, 5, label="最多角色", value=1)
+            trait = gr.Textbox(label="性格特点", value="无")
+            interest = gr.Textbox(label="兴趣主题", value="无")
+            sensitivity = gr.Textbox(label="感官敏感点", value="无")
+            cognitive = gr.Textbox(label="认知水平", value="无")
+            edu_goal = gr.Textbox(label="教育目标", value="无")
             generate_btn = gr.Button("生成图文绘本")
 
         with gr.Column():
             title_box = gr.Textbox(label="绘本标题")
-            # story_box = gr.Textbox(label="故事正文", lines=10)
-            story_display = gr.HTML(label="故事正文（图文）")
+            story_display = gr.HTML(label="绘本图文内容")
             goal_box = gr.Textbox(label="教育目标")
             tip_box = gr.Textbox(label="家长引导建议")
             qa_box = gr.Textbox(label="理解问答", lines=4)
-            # image_gallery = gr.Dataset(components=[gr.Textbox(visible=True, label="段落"), gr.Image(label="插图")],
-            #                            label="📖 图文展示区")
             image_progress = gr.Textbox(label="生成进度", interactive=False)
+            # audio_output = gr.Audio(label="🎧 故事朗读音频", type='filepath')
 
     with gr.Row():
-        with gr.Column():
-            pdf_file_story = gr.File(label="📘 绘本PDF（仅正文）")
-            pdf_file_full = gr.File(label="📕 完整PDF（含目标与建议）")
-            pdf_file_qa = gr.File(label="🧠 练习版PDF（附带问答）")
-            pdf_file_illustrated = gr.File(label="🎨 图文版PDF（每段配图）")
+        pdf_story = gr.File(label="📘 正文PDF")
+        pdf_full = gr.File(label="📕 完整PDF")
+        pdf_qa = gr.File(label="🧠 练习PDF")
+        pdf_illustrated = gr.File(label="🎨 图文PDF")
 
     intermediate_state = gr.State()
 
     generate_btn.click(
         fn=generate_story_only,
-        inputs=[age, trait, interest, sensitivity, cognitive, max_words, max_characters, edu_goal, edu_goal_custom],
+        inputs=[age, trait, interest, sensitivity, cognitive, max_words, max_characters, para_count, edu_goal],
         outputs=[title_box, story_display, goal_box, tip_box, qa_box, intermediate_state]
     )
 
     intermediate_state.change(
         fn=async_generate_images_and_pdfs,
         inputs=[intermediate_state],
-        outputs=[story_display, image_progress, pdf_file_story, pdf_file_full, pdf_file_qa, pdf_file_illustrated],
+        outputs=[story_display, image_progress, pdf_story, pdf_full, pdf_qa, pdf_illustrated],
         show_progress=True
     )
+
+    # intermediate_state.change(
+    #     fn=async_generate_images_and_pdfs,
+    #     inputs=[intermediate_state],
+    #     outputs=[
+    #         story_display, image_progress,
+    #         pdf_story, pdf_full, pdf_qa, pdf_illustrated,
+    #         audio_output
+    #     ],
+    #     show_progress=True
+    # )
 
     demo.launch()

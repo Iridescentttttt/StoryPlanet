@@ -1,0 +1,8 @@
+# 忽略根目录下的 env.py
+/env.py
+/Children-Stories-0-Final.json
+/data1.py
+/data2.py
+/data3.py
+/data4.py
+/data5.py
